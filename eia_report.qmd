@@ -1,0 +1,242 @@
+---
+title: "Offshore Ornithology - Firth of Forth case: Desk-Based Baseline"
+subtitle: " A learning exercise, not a real assessment"
+author: "Thayusky da Penha Correa"
+date: today
+format:
+  html:
+    embed-resources: true
+    toc: true
+    number-sections: true
+execute:
+  echo: false
+  warning: false
+  message: false
+params:
+  year_min: 1979
+  year_max: 2000
+  github: "https://github.com/thayusky"
+---
+
+```{r}
+library(dplyr); library(readr); library(ggplot2); library(leaflet); library(knitr)
+
+birds <- read_csv("data/forth_birds.csv", show_col_types = FALSE) |>
+  filter(!is.na(year), year >= params$year_min, year <= params$year_max)
+
+key_species <- tribble(
+  ~latin,                ~uk_name,       ~main_risk,      ~forth_spa,
+  "Morus bassanus",      "Gannet",       "Collision",     "Yes (Bass Rock)",
+  "Rissa tridactyla",    "Kittiwake",    "Collision",     "Yes",
+  "Larus argentatus",    "Herring gull", "Collision",     "Yes",
+  "Uria aalge",          "Guillemot",    "Displacement",  "Yes",
+  "Alca torda",          "Razorbill",    "Displacement",  "Yes",
+  "Fratercula arctica",  "Puffin",       "Displacement",  "Yes (Isle of May)",
+  "Fulmarus glacialis",  "Fulmar",       "Low",           "Yes"
+)
+
+key <- inner_join(birds, key_species, by = "latin")
+
+key_table <- key |>
+  group_by(uk_name, main_risk, forth_spa) |>
+  summarise(sightings = n(), birds = sum(count), .groups = "drop") |>
+  arrange(desc(birds))
+```
+
+::: {.callout-note}
+## A learning exercise
+
+I built this document to learn R Shiny and Quarto after a workshop at the MASTS
+Annual Science Meeting 2026. It is practice, not a real environmental assessment.
+See [About this exercise](#about) at the end for how to send corrections.
+:::
+
+## Introduction
+
+This report describes the seabirds recorded in the Firth of Forth from historical
+boat surveys. It is the first step of an ornithology assessment: establishing which
+species use the area, where, and when.
+
+## Data and methods
+
+### Data used
+
+| Data | Source | Details |
+|---|---|---|
+| Seabird sightings | JNCC Seabirds at Sea (ESAS), accessed through GBIF | Dataset "JNCC seabird distribution and abundance data (all trips) from ESAS database", GBIF dataset key `93c8cc03-30cf-474e-8173-dbe5a22a5d28`. Boat surveys, 1979 to 2000. Licence CC BY-NC 4.0. |
+| Study area | Bounding box set in the download script | 55.9 to 56.4 N, 3.4 to 1.8 W (Firth of Forth and outer approaches). |
+| Key species lookup | Compiled by the author as a draft | Seven species with their main risk from offshore wind and their link to the Forth protected colonies. Not part of the JNCC data. |
+| Background map | OpenStreetMap, through the `leaflet` package | Used for display only. |
+
+The sightings were downloaded on 12 November 2026 with an R script that calls the
+GBIF API and keeps date, position, species and count.
+
+### Sample analysed
+
+The analysis uses **`r format(nrow(birds), big.mark = ",")` sightings** of
+**`r n_distinct(birds$species)` species** recorded between
+**`r min(birds$year)`** and **`r max(birds$year)`**. This is part of the roughly
+30,000 records available for the area, because the download stopped early.
+
+### Methods
+
+Key species were selected for their link to the Forth protected seabird colonies
+and their sensitivity to offshore wind farms. They are joined to the sightings by
+Latin name. Counts are summed by species, by month, and by season.
+
+Software: `r R.version.string`, with the packages dplyr, readr, ggplot2, leaflet
+and knitr, rendered with Quarto.
+
+## Baseline
+
+### Key species
+
+The most recorded key species is **`r key_table$uk_name[1]`**, with
+`r format(key_table$birds[1], big.mark = ",")` birds counted.
+
+```{r}
+kable(key_table,
+      col.names = c("Species", "Main risk", "Forth SPA species", "Sightings", "Birds"),
+      format.args = list(big.mark = ","))
+```
+
+### Distribution
+
+Each dot is one sighting of a key species, coloured by its main risk. 
+
+```{r}
+pal <- colorFactor(c("#c0392b", "#1f6fb2", "#7f8c8d"),
+                   levels = c("Collision", "Displacement", "Low"))
+
+leaflet(slice_sample(key, n = 5000),
+        options = leafletOptions(preferCanvas = TRUE)) |>
+  addProviderTiles("Esri.OceanBasemap", group = "Ocean") |>
+  addProviderTiles("Esri.WorldImagery", group = "Satellite") |>
+  addCircleMarkers(~lon, ~lat, radius = 3, stroke = FALSE, fillOpacity = 0.5,
+                   fillColor = ~pal(main_risk),
+                   popup = ~paste0(uk_name, ": ", count, " (", date, ")")) |>
+  addLegend(pal = pal, values = ~main_risk, title = "Main risk",
+            position = "bottomright") |>
+  addLayersControl(baseGroups = c("Ocean", "Satellite"),
+                   options = layersControlOptions(collapsed = FALSE))
+```
+
+### Seasonality
+
+```{r}
+#| fig-height: 6
+key |>
+  group_by(uk_name, month) |>
+  summarise(birds = sum(count), .groups = "drop") |>
+  ggplot(aes(factor(month, levels = 1:12, labels = month.abb), birds)) +
+  geom_col(fill = "#1f6fb2") +
+  facet_wrap(~uk_name, scales = "free_y", ncol = 2) +
+  scale_x_discrete(drop = FALSE) +
+  labs(x = NULL, y = "Birds recorded") +
+  theme_minimal(base_size = 11)
+```
+
+### Breeding and non-breeding seasons
+
+Breeding season is taken as April to August for all species, which is a simplification.
+
+```{r}
+key |>
+  group_by(Species = uk_name) |>
+  summarise(`Breeding (Apr-Aug)`     = sum(count[month %in% 4:8]),
+            `Non-breeding (Sep-Mar)` = sum(count[!month %in% 4:8])) |>
+  kable(format.args = list(big.mark = ","))
+```
+
+## Limitations
+
+- Counts are raw sightings, not densities. They reflect where and when boats surveyed.
+- The data end around 2000 and do not describe present-day conditions.
+- Only part of the available dataset was downloaded for this example.
+- A real assessment needs recent site-specific surveys, typically two years of monthly data.
+
+## Next steps in a full EIA
+
+1. Commission current surveys of the site and a surrounding buffer.
+2. Estimate densities and populations for each key species.
+3. Assess collision and displacement, alone and with other projects.
+4. Propose mitigation and monitoring.
+
+## Discussion: data sources and workflow
+
+### Where the data come from
+
+The sightings come from the **JNCC Seabirds at Sea** database, part of the
+European Seabirds at Sea (ESAS) collaboration. Trained observers on boats counted
+seabirds along survey routes using the standard ESAS method, recording species,
+number, date and position. The public dataset covers 1979 to 2000 and holds about
+1.1 million records across north-west European waters.
+
+The data were accessed through **GBIF** (Global Biodiversity Information Facility).
+Only records inside a box around the Firth of Forth were requested. The GBIF copy
+is licensed CC BY-NC 4.0 (non-commercial use, with attribution).
+
+The key species table is **not** part of the JNCC data. It was compiled separately
+as a draft and must be checked against official sources (NatureScot SiteLink
+citations for the Forth protected areas, and the UK Birds of Conservation Concern
+list) before any real use.
+
+### How the workflow was built
+
+```{mermaid}
+flowchart LR
+  A[GBIF: JNCC Seabirds at Sea] --> B[R script: download and tidy]
+  B --> C[data/forth_birds.csv]
+  K[Key species lookup] --> D
+  C --> D[Shared R code: filter, join, summarise]
+  D --> E[Shiny app: explore]
+  D --> F[Quarto report: document]
+```
+
+1. **Download and tidy (R).** A script requested the records from the GBIF API,
+   kept date, position, species and count, added year and month, and saved one
+   CSV file.
+2. **Key species lookup.** A small table links each key species to its main risk
+   from offshore wind (collision or displacement) and to the Forth protected
+   colonies. It is joined to the sightings by Latin name.
+3. **Explore (Shiny).** An interactive app filters the data by species, years and
+   months, and shows a map, a seasonality chart and the key species table.
+4. **Report (Quarto).** This document runs the same code from top to bottom and
+   writes the results into text, tables and figures. Changing the parameters at
+   the top and rendering again produces an updated report.
+
+### What this approach offers
+
+- **Reproducible:** every number in this report is calculated from the data when
+  the document is rendered, so text and results cannot drift apart.
+- **Reusable:** the same template works for another area, period or dataset.
+- **Transparent:** the code, the data source and the limitations are all stated.
+
+### What it does not replace
+
+This is a desk-based exercise. It does not replace current site-specific surveys,
+density estimation, or collision and displacement modelling, which a real
+assessment requires.
+
+## About this exercise {#about}
+
+This document is a learning exercise. I started it from zero during and after the
+"Marine Data Transformation in Industry" workshop, run by the Haskoning team at the
+MASTS Annual Science Meeting 2026, to practise R Shiny and Quarto with real data.
+I had help from Claude, an AI assistant, to write and debug the code.
+
+**It is not a real environmental assessment**, and nothing here should be used to
+draw conclusions about seabirds in the Firth of Forth or about any development.
+
+I plan to keep updating it as a portfolio piece and as a practical way to keep
+learning. Things I would like to add next:
+
+- the full set of records for the area;
+- the conservation status of each species;
+- a proposed site with a buffer, to count birds inside it;
+- official boundaries of the protected areas.
+
+Corrections, suggestions and help to build on it are very welcome. You can find
+the code and get in touch through my GitHub: <`r params$github`>.
+
+*Last updated: `r format(Sys.Date(), "%d %B %Y")`.*
